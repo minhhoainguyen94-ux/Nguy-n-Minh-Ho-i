@@ -94,7 +94,7 @@ app.post("/api/assess", async (req, res) => {
 
     // Call Gemini to generate a highly detailed and friendly report from Dr. Hoai's Perspective representing the clinic
     const ai = getGeminiClient();
-    const prompt = `Bạn là Trợ lý Thai kỳ AI đại diện cho Bác sĩ Hoài (BS. Hoài) tại Phòng khám Bác sĩ Biên - Bác sĩ CKI. Huế.
+    const prompt = `Bạn là Trợ lý Thai kỳ AI đại diện cho Bác sĩ Hoài (BS. Hoài) tại Phòng khám Bác sĩ Biên - Bác sĩ CKI. Nguyễn Đình Huế.
 Hãy viết một báo cáo phân tích thai kỳ chuyên nghiệp, cụ thể theo từng mốc tuần thai, vừa mang tính chuyên gia y khoa vừa cực kỳ ấm áp, tin cậy.
 
 Thông tin phân tích:
@@ -124,7 +124,7 @@ Yêu cầu cấu trúc câu trả lời bắt buộc phải theo định dạng 
 
 Thêm một lời chia sẻ tích cực tạo động lực từ Bác sĩ Hoài ở cuối.
 Cuối cùng, bắt buộc in đậm nguyên văn dòng lưu ý y khoa sau để tuân thủ đạo đức nghề nghiệp:
-\"Lưu ý: Kết quả phân tích từ Trợ lý AI và bảng chuẩn chỉ mang tính chất tham khảo. Vui lòng trực tiếp tới Phòng khám Bác sĩ Biên - Bác sĩ CKI. Huế hoặc gặp bác sĩ sản khoa của bạn để thăm khám lâm sàng, siêu âm đo đạc chính xác và nhận được tư vấn trực tiếp tốt nhất.\"`;
+\"Lưu ý: Kết quả phân tích từ Trợ lý AI và bảng chuẩn chỉ mang tính chất tham khảo. Vui lòng trực tiếp tới Phòng khám Bác sĩ Biên - Bác sĩ CKI. Nguyễn Đình Huế hoặc gặp bác sĩ sản khoa của bạn để thăm khám lâm sàng, siêu âm đo đạc chính xác và nhận được tư vấn trực tiếp tốt nhất.\"`;
 
     // Chuỗi fallback để đảm bảo ứng dụng luôn hoạt động ổn định khi một mô hình quá tải
     const modelsToTry = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
@@ -195,6 +195,92 @@ Cuối cùng, bắt buộc in đậm nguyên văn dòng lưu ý y khoa sau để
       res.end();
     } else {
       return res.status(500).json({ error: err.message || "Đã xảy ra lỗi hệ thống khi xử lý dữ liệu thai kỳ." });
+    }
+  }
+});
+
+// REST API for Fetal Q&A Consultation
+app.post("/api/ask", async (req, res) => {
+  const { question, week } = req.body;
+
+  if (!question || typeof question !== "string" || !question.trim()) {
+    return res.status(400).json({ error: "Vui lòng nhập câu hỏi thăm vấn của bạn." });
+  }
+
+  try {
+    const ai = getGeminiClient();
+    const prompt = `Bạn là Trợ lý Thai kỳ AI đại diện cho Bác sĩ Hoài (BS. Hoài) tại Phòng khám Bác sĩ Biên - Bác sĩ CKI. Nguyễn Đình Huế.
+Hãy giải đáp câu hỏi của mẹ bầu một cách chuyên nghiệp, cụ thể, dễ hiểu, giàu yêu thương và cực kỳ ấm áp.
+${week ? `Lưu ý mốc tuần thai dự kiến hiện tại của mẹ: Tuần thứ ${week}. Hãy đưa ra các khuyến cáo dinh dưỡng học, chế độ ăn uống, kiểm tra y khoa thật sát sườn với tuần thai này nhé.` : ""}
+
+Câu hỏi từ mẹ bầu: "${question}"
+
+Hãy cấu trúc câu trả lời một cách khoa học bằng các biểu tượng gạch đầu dòng Markdown, tối ưu hiển thị đọc dễ dàng trên thiết bị di động.
+Bắt buộc in đậm nguyên văn dòng lưu ý y khoa sau để tuân thủ đạo đức nghề nghiệp:
+"Lưu ý: Kết quả tư vấn từ Trợ lý AI và bảng chuẩn chỉ mang tính chất tham khảo chung. Quý khách vui lòng qua trực tiếp Phòng khám Bác sĩ Biên - Bác sĩ CKI. Nguyễn Đình Huế hoặc trao đổi trực tiếp với bác sĩ chuyên khoa sản của bạn để nhận chẩn đoán và tư vấn y khoa phù hợp nhất."`;
+
+    const modelsToTry = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
+    let reportStream: any = null;
+    let lastError: any = null;
+    const maxRetries = 1;
+
+    for (const modelName of modelsToTry) {
+      let attempts = 0;
+      while (attempts < maxRetries) {
+        try {
+          console.log(`[AI Q&A] Đang thử giải đáp STREAM với mô hình: ${modelName}`);
+          reportStream = await ai.models.generateContentStream({
+            model: modelName,
+            contents: prompt,
+            config: {
+              temperature: 0.7,
+            },
+          });
+          
+          if (reportStream) {
+            console.log(`[AI Q&A] Tạo dòng STREAM câu hỏi thành công với mô hình: ${modelName}`);
+            break;
+          }
+        } catch (err: any) {
+          attempts++;
+          lastError = err;
+          console.log(`[AI Q&A Alert] Mô hình ${modelName} bận/lỗi ở lần thử ${attempts}/${maxRetries}: ${err.message || err}`);
+        }
+      }
+      if (reportStream) {
+        break;
+      }
+    }
+
+    if (!reportStream) {
+      throw lastError || new Error("Tất cả các dịch vụ giải đáp y đức đang quá tải. Vui lòng bấm hỏi lại sau giây lát.");
+    }
+
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("Transfer-Encoding", "chunked");
+
+    try {
+      for await (const chunk of reportStream) {
+        if (chunk.text) {
+          res.write(`data: ${JSON.stringify({ type: "chunk", text: chunk.text })}\n\n`);
+        }
+      }
+      res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+    } catch (streamErr: any) {
+      console.log("[AI Q&A Error] Lỗi ghi dòng dữ liệu SSE:", streamErr);
+      res.write(`data: ${JSON.stringify({ type: "error", error: "Dòng dữ liệu bị gián đoạn." })}\n\n`);
+    } finally {
+      res.end();
+    }
+  } catch (err: any) {
+    console.error("Error in /api/ask:", err);
+    if (res.headersSent) {
+      res.write(`data: ${JSON.stringify({ type: "error", error: err.message || "Đã xảy ra lỗi khi tạo phản hồi." })}\n\n`);
+      res.end();
+    } else {
+      return res.status(500).json({ error: err.message || "Đã xảy ra lỗi khi giải đáp câu hỏi của bạn." });
     }
   }
 });

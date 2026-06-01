@@ -136,6 +136,259 @@ export default function App() {
   const [isZoomed, setIsZoomed] = useState<boolean>(true);
   const [loadingProgress, setLoadingProgress] = useState<number>(0);
 
+  // AI Q&A States
+  const [qaQuestion, setQaQuestion] = useState<string>("");
+  const [qaAnswer, setQaAnswer] = useState<string>("");
+  const [qaLoading, setQaLoading] = useState<boolean>(false);
+  const [qaError, setQaError] = useState<string | null>(null);
+
+  // Question Submission handles Fetal Q&A Consultation Stream
+  const handleAskSubmit = async (customQ?: string, currentW?: number) => {
+    const finalQuestion = customQ || qaQuestion;
+    if (!finalQuestion || !finalQuestion.trim()) {
+      setQaError("Vui lòng nhập câu hỏi thăm vấn của bạn.");
+      return;
+    }
+
+    setQaError(null);
+    setQaLoading(true);
+    setQaAnswer("");
+
+    try {
+      const response = await fetch("/api/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: finalQuestion,
+          week: currentW || (assessResult ? assessResult.weeks : explorerWeek)
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || "Gửi câu hỏi thất bại.");
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error("Không thể khởi tạo luồng dữ liệu Q&A.");
+      }
+
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+      let accumulatedAnswer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const jsonStr = line.slice(6).trim();
+          if (!jsonStr) continue;
+
+          try {
+            const parsed = JSON.parse(jsonStr);
+            if (parsed.type === "chunk") {
+              accumulatedAnswer += parsed.text;
+              setQaAnswer(accumulatedAnswer);
+            } else if (parsed.type === "error") {
+              setQaError(parsed.error);
+            }
+          } catch (e) {
+            console.error("Lỗi parse SSE:", e);
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error("Lỗi khi hỏi đáp:", err);
+      setQaError(err.message || "Đã xảy ra lỗi hệ thống khi kết nối tới Trợ lý AI.");
+    } finally {
+      setQaLoading(false);
+    }
+  };
+
+  const renderQaAnswer = (text: string) => {
+    if (!text) return null;
+    return (
+      <div className="space-y-2 text-stone-750 text-xs sm:text-sm leading-relaxed whitespace-pre-line" id="qa-rendered-answer">
+        {text.split("\n").map((line, idx) => {
+          if (!line.trim()) return <div key={idx} className="h-2" />;
+          
+          let cleanLine = line.trim();
+          const isBullet = cleanLine.startsWith("-") || cleanLine.startsWith("*") || cleanLine.startsWith("•");
+          if (isBullet) {
+            cleanLine = cleanLine.replace(/^[-*•]\s*/, "");
+          }
+
+          // Parse **bold** parts into <strong> elements
+          const parts = cleanLine.split(/(\*\*.*?\*\*)/g);
+          const lineElements = parts.map((part, pIdx) => {
+            if (part.startsWith("**") && part.endsWith("**")) {
+              return <strong key={pIdx} className="font-extrabold text-stone-900">{part.slice(2, -2)}</strong>;
+            }
+            return part;
+          });
+
+          if (isBullet) {
+            const bulletIcon = getIconForLine(cleanLine);
+            return (
+              <div key={idx} className="flex items-start gap-2 pl-2 mt-1.5">
+                <span className="text-base select-none shrink-0" role="img">{bulletIcon}</span>
+                <span className="flex-1 mt-0.5">{lineElements}</span>
+              </div>
+            );
+          }
+
+          return (
+            <p key={idx} className="font-medium text-stone-850 mt-1">
+              {lineElements}
+            </p>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const renderPregnancyQASection = (customClass = "") => {
+    const presets = [
+      {
+        tag: "Dinh dưỡng",
+        q: "Nên ăn những gì ở tuần thai thứ 12 để tối ưu phát triển não bộ và thần kinh cho bé yêu?",
+        short: "Tuần 12: Ăn gì bổ não?"
+      },
+      {
+        tag: "Tiểu đường",
+        q: "Chế độ dinh dưỡng ăn kiêng khoa học phòng ngừa tiểu đường thai kỳ ở tuần thai 24 - 28?",
+        short: "Tuần 24-28: Phòng tiểu đường?"
+      },
+      {
+        tag: "Nhẹ cân",
+        q: "Tuần thai thứ 32 siêu âm thấy bé nhẹ cân so với bách phân vị chuẩn, mẹ nên bồi bổ thực đơn gì?",
+        short: "Tuần 32: Bé nhẹ cân bồi bổ gì?"
+      },
+      {
+        tag: "Sức khỏe",
+        q: "Cơ thể bị chuột rút và tê tay chân ở tuần thai 20 là thiếu chất gì? Gợi ý thực đơn bổ sung?",
+        short: "Tuần 20: Tê chân tay thiếu chất gì?"
+      },
+      {
+        tag: "Vượt cạn",
+        q: "Dấu hiệu chuyển dạ cần đi viện ngay ở tuần thai thứ 36+ và chế độ dinh dưỡng giữ sức?",
+        short: "Tuần 36+: Chuẩn bị vượt cạn?"
+      }
+    ];
+
+    return (
+      <div className={`bg-white rounded-3xl border border-stone-100 p-6 shadow-sm space-y-5 ${customClass}`} id="pregnancy-qa-block">
+        <div className="flex items-center space-x-2.5 border-b border-stone-100 pb-3">
+          <div className="w-10 h-10 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center text-[#1A3A34] shadow-sm shrink-0">
+            <HelpCircle className="w-5 h-5" />
+          </div>
+          <div>
+            <h4 className="font-extrabold text-[#1A3A34] text-xs sm:text-sm">Hỏi Đáp Thai Kỳ AI cùng BS. Hoài</h4>
+            <p className="text-[10px] text-stone-400">Tham vấn dinh dưỡng thai sản, chế độ dinh dưỡng, xét nghiệm chuẩn y khoa</p>
+          </div>
+        </div>
+
+        {/* Dynamic Preset Cards */}
+        <div className="space-y-2">
+          <p className="text-[10px] text-stone-400 font-bold uppercase tracking-wider">Mẹ bầu hay hỏi (Click để hỏi BS ngay):</p>
+          <div className="flex flex-wrap gap-1.5" id="qa-presets-list">
+            {presets.map((preset, idx) => (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => {
+                  setQaQuestion(preset.q);
+                  handleAskSubmit(preset.q);
+                }}
+                disabled={qaLoading}
+                className="text-left px-3 py-2 rounded-xl text-stone-700 bg-[#FCFAF7] hover:bg-orange-50/50 hover:text-orange-950 border border-stone-200/60 hover:border-orange-200 text-[11px] transition-all font-semibold max-w-full duration-150 disabled:opacity-50"
+              >
+                <span className="inline-block text-[9px] font-bold text-orange-600 bg-orange-50 border border-orange-100/50 px-1.5 py-0.5 rounded mr-1.5 uppercase shrink-0">
+                  {preset.tag}
+                </span>
+                {preset.short}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Ask Form */}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleAskSubmit();
+          }}
+          className="space-y-3.5"
+          id="qa-input-form"
+        >
+          <div className="relative">
+            <textarea
+              value={qaQuestion}
+              onChange={(e) => setQaQuestion(e.target.value)}
+              placeholder="Đặt bất kỳ câu hỏi nào cho Bác sĩ (Ví dụ: Chế độ dinh dưỡng tuần 16, các mốc xét nghiệm cần lưu ý...)"
+              required
+              rows={2}
+              className="w-full pl-4 pr-12 py-3 bg-stone-50/50 focus:bg-white rounded-xl border border-stone-200 text-stone-900 font-medium text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all placeholder:text-stone-400 resize-none"
+              id="qa-question-field"
+            />
+            <button
+              type="submit"
+              disabled={qaLoading || !qaQuestion.trim()}
+              className="absolute right-2.5 bottom-3.5 p-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl transition-all disabled:opacity-40 disabled:pointer-events-none shadow-sm flex items-center justify-center shrink-0"
+              title="Gửi câu hỏi"
+              id="btn-submit-qa"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </form>
+
+        {qaError && (
+          <div className="p-3 rounded-xl bg-red-50 border border-red-100 text-red-800 text-[11px] font-semibold" id="qa-error-box">
+            {qaError}
+          </div>
+        )}
+
+        {/* Show active streaming answers */}
+        {(qaLoading || qaAnswer) && (
+          <div className="p-4 rounded-2xl bg-[#FCFAF7] border border-stone-150/80 shadow-inner space-y-3.5 relative overflow-hidden" id="qa-answer-block">
+            <div className="flex items-center justify-between border-b border-stone-100/85 pb-2.5">
+              <span className="text-xs font-bold text-emerald-800 flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-emerald-500 animate-pulse" />
+                Bác sĩ Hoài giải đáp:
+              </span>
+              {qaLoading && (
+                <span className="text-[10px] text-stone-400 font-bold uppercase tracking-widest animate-pulse flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+                  Đang soạn lời khuyên...
+                </span>
+              )}
+            </div>
+
+            <div className="max-h-[350px] overflow-y-auto pr-1">
+              {qaAnswer ? (
+                renderQaAnswer(qaAnswer)
+              ) : (
+                <div className="space-y-2 py-1 animate-pulse" id="qa-loading-skeleton">
+                  <div className="h-3 bg-stone-200 rounded-full w-3/4"></div>
+                  <div className="h-3 bg-stone-200 rounded-full w-5/6"></div>
+                  <div className="h-3 bg-stone-200 rounded-full w-2/3"></div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // Rotating timer quote effect - 15 seconds per message
   useEffect(() => {
     const timer = setInterval(() => {
@@ -534,7 +787,7 @@ export default function App() {
             <div>
               <p className="text-xs uppercase tracking-wider text-rose-500 font-bold mb-0.5">Phòng khám Nội Tổng Hợp - Sản Phụ khoa & Siêu âm</p>
               <h1 className="text-xl font-bold text-stone-900 tracking-tight flex items-center">
-                Bác sĩ Biên - Bác sĩ CKI. Huế  
+                Bác sĩ Biên - Bác sĩ CKI. Nguyễn Đình Huế  
                 <span className="ml-2.5 px-2 py-0.5 text-[10px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-full flex items-center gap-1">
                   <Sparkles className="w-2.5 h-2.5" /> Trợ lý Thai kỳ AI
                 </span>
@@ -769,6 +1022,9 @@ export default function App() {
                 </button>
               </form>
             </div>
+
+            {/* Pregnancy Q&A Block */}
+            {renderPregnancyQASection()}
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 animate-fade-in" id="assess-grid-viewport">
@@ -836,6 +1092,9 @@ export default function App() {
                     </div>
                   </form>
                 </div>
+
+                {/* Pregnancy Q&A Block inside Results View */}
+                {renderPregnancyQASection()}
               </div>
 
               {/* Right Results and Custom SVG Charts Panel */}
@@ -1200,9 +1459,9 @@ export default function App() {
       {/* Footer Branding Area */}
       <footer className="mt-20 border-t border-stone-200/60 bg-stone-100/60 py-10 text-center" id="main-footer">
         <div className="max-w-6xl mx-auto px-4 text-stone-500 text-xs space-y-3">
-          <p className="font-bold text-stone-700">© 2026 Phòng khám Nội Tổng Hợp - Sản Phụ khoa & Siêu âm Bác sĩ Biên - Bác sĩ CKI. Huế. Bảo lưu mọi quyền.</p>
+          <p className="font-bold text-stone-700">© 2026 Phòng khám Nội Tổng Hợp - Sản Phụ khoa & Siêu âm Bác sĩ Biên - Bác sĩ CKI. Nguyễn Đình Huế. Bảo lưu mọi quyền.</p>
           <p className="max-w-2xl mx-auto text-[11px] leading-relaxed">
-            Hệ thống Trợ lý Thai kỳ AI thuộc bản quyền công nghệ thông tin y khoa Phòng khám Bác sĩ Biên - Bác sĩ CKI. Huế. 
+            Hệ thống Trợ lý Thai kỳ AI thuộc bản quyền công nghệ thông tin y khoa Phòng khám Bác sĩ Biên - Bác sĩ CKI. Nguyễn Đình Huế. 
             Mọi lời khuyên chăm sóc sức khỏe, chế độ dinh dưỡng, xét nghiệm cần luôn tuân chỉ theo sự chẩn đoán lâm sàng của bác sĩ sản khoa trực tiếp chăm sóc thai kỳ của bạn.
           </p>
         </div>
