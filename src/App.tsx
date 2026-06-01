@@ -170,9 +170,16 @@ export default function App() {
     setQaAnswer("");
 
     try {
-      const response = await fetch(getApiUrl("/api/ask"), {
+      const url = getApiUrl("/api/ask");
+      const isCrossOrigin = url.startsWith("http");
+      const headers: Record<string, string> = {
+        "Content-Type": isCrossOrigin ? "text/plain" : "application/json"
+      };
+
+      const response = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
+        credentials: isCrossOrigin ? "include" : "same-origin",
         body: JSON.stringify({
           question: finalQuestion,
           week: currentW || (assessResult ? assessResult.weeks : explorerWeek)
@@ -552,10 +559,17 @@ export default function App() {
 
       const clientDateString = new Date().toISOString().split("T")[0];
 
+      const url = getApiUrl("/api/assess");
+      const isCrossOrigin = url.startsWith("http");
+      const headers: Record<string, string> = {
+        "Content-Type": isCrossOrigin ? "text/plain" : "application/json"
+      };
+
       // Gửi yêu cầu API và chạy hiệu ứng thanh tiến trình chẩn đoán y khoa song song
-      const apiPromise = fetch(getApiUrl("/api/assess"), {
+      const apiPromise = fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
+        credentials: isCrossOrigin ? "include" : "same-origin",
         body: JSON.stringify({
           edd,
           efw: parsedEfw,

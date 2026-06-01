@@ -17,15 +17,36 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(express.json({ limit: "15mb" }));
+app.use(express.text({ type: "text/plain", limit: "15mb" }));
 
-// Configure CORS for cross-origin requests (e.g. from Netlify)
+// Dynamic CORS configuration for robust cross-origin access (e.g. from Netlify)
 app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+  } else {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  }
+  
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept");
+  
   if (req.method === "OPTIONS") {
-    res.sendStatus(200);
+    res.status(200).end();
     return;
+  }
+  next();
+});
+
+// Middleware to parse JSON stringified payloads received as text/plain to bypass OPTIONS preflight
+app.use((req, res, next) => {
+  if (typeof req.body === "string" && req.body.trim().startsWith("{")) {
+    try {
+      req.body = JSON.parse(req.body);
+    } catch (e) {
+      // Keep it as string if parsing fails
+    }
   }
   next();
 });
@@ -48,6 +69,48 @@ function getGeminiClient(): GoogleGenAI {
     });
   }
   return aiClient;
+}
+
+// High-availability content streaming with automatic retries and model fallbacks
+async function generateContentStreamWithRetry(
+  ai: GoogleGenAI,
+  contents: any,
+  config: any = { temperature: 0.7 }
+): Promise<any> {
+  const modelsToTry = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
+  let lastError: any = null;
+
+  for (const modelName of modelsToTry) {
+    const maxRetries = 3;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`[AI Stream] Đang kết nối mô hình ${modelName} (Lần thử ${attempt}/${maxRetries})...`);
+        const stream = await ai.models.generateContentStream({
+          model: modelName,
+          contents,
+          config,
+        });
+        
+        if (stream) {
+          console.log(`[AI Stream] Tạo dòng stream thành công bằng mô hình ${modelName} ở lần thử ${attempt}`);
+          return stream;
+        }
+      } catch (err: any) {
+        lastError = err;
+        console.log(`[AI Stream Alert] Lỗi khi kết nối mô hình ${modelName} ở lần thử ${attempt}/${maxRetries}: ${err.message || err}`);
+        
+        // Wait exponentially before retry
+        if (attempt < maxRetries) {
+          const delay = attempt * 1200;
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
+    }
+    // Small gap of 500ms before falling back to the next model
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  
+  throw lastError || new Error("Tất cả dịch vụ AI hiện tại đang quá tải. Quý khách vui lòng thử lại sau ít giây.");
 }
 
 // REST API for Fetal Growth Assessment
@@ -138,43 +201,8 @@ Thêm một lời chia sẻ tích cực tạo động lực từ Bác sĩ Hoài 
 Cuối cùng, bắt buộc in đậm nguyên văn dòng lưu ý y khoa sau để tuân thủ đạo đức nghề nghiệp:
 \"Lưu ý: Kết quả phân tích từ Trợ lý AI và bảng chuẩn chỉ mang tính chất tham khảo. Vui lòng trực tiếp tới Phòng khám Bác sĩ Biên - Bác sĩ CKI. Nguyễn Đình Huế hoặc gặp bác sĩ sản khoa của bạn để thăm khám lâm sàng, siêu âm đo đạc chính xác và nhận được tư vấn trực tiếp tốt nhất.\"`;
 
-    // Chuỗi fallback để đảm bảo ứng dụng luôn hoạt động ổn định khi một mô hình quá tải
-    const modelsToTry = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
-    let reportStream: any = null;
-    let lastError: any = null;
-    const maxRetries = 1;
-
-    for (const modelName of modelsToTry) {
-      let attempts = 0;
-      while (attempts < maxRetries) {
-        try {
-          console.log(`[AI Assessment] Đang thử phân tích STREAM với mô hình: ${modelName}`);
-          reportStream = await ai.models.generateContentStream({
-            model: modelName,
-            contents: prompt,
-            config: {
-              temperature: 0.7,
-            },
-          });
-          
-          if (reportStream) {
-            console.log(`[AI Assessment] Tạo dòng STREAM thành công với mô hình: ${modelName}`);
-            break;
-          }
-        } catch (err: any) {
-          attempts++;
-          lastError = err;
-          console.log(`[AI Assessment Alert] Mô hình ${modelName} bận/lỗi STREAM ở lần thử ${attempts}/${maxRetries}: ${err.message || err}`);
-        }
-      }
-      if (reportStream) {
-        break; // Hoàn thành xuất sắc, chuyển tiếp kết quả
-      }
-    }
-
-    if (!reportStream) {
-      throw lastError || new Error("Tất cả các dịch vụ AI hiện tại đang quá tải. Vui lòng thử lại sau.");
-    }
+    // Gọi helper với cơ chế tự động thử lại nhiều lần và tự động chuyển đổi mô hình
+    const reportStream = await generateContentStreamWithRetry(ai, prompt, { temperature: 0.7 });
 
     // Thiết lập HTTP headers để truyền dữ liệu kiểu Server-Sent Events (SSE)
     res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
@@ -231,42 +259,8 @@ Hãy cấu trúc câu trả lời một cách khoa học bằng các biểu tư�
 Bắt buộc in đậm nguyên văn dòng lưu ý y khoa sau để tuân thủ đạo đức nghề nghiệp:
 "Lưu ý: Kết quả tư vấn từ Trợ lý AI và bảng chuẩn chỉ mang tính chất tham khảo chung. Quý khách vui lòng qua trực tiếp Phòng khám Bác sĩ Biên - Bác sĩ CKI. Nguyễn Đình Huế hoặc trao đổi trực tiếp với bác sĩ chuyên khoa sản của bạn để nhận chẩn đoán và tư vấn y khoa phù hợp nhất."`;
 
-    const modelsToTry = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
-    let reportStream: any = null;
-    let lastError: any = null;
-    const maxRetries = 1;
-
-    for (const modelName of modelsToTry) {
-      let attempts = 0;
-      while (attempts < maxRetries) {
-        try {
-          console.log(`[AI Q&A] Đang thử giải đáp STREAM với mô hình: ${modelName}`);
-          reportStream = await ai.models.generateContentStream({
-            model: modelName,
-            contents: prompt,
-            config: {
-              temperature: 0.7,
-            },
-          });
-          
-          if (reportStream) {
-            console.log(`[AI Q&A] Tạo dòng STREAM câu hỏi thành công với mô hình: ${modelName}`);
-            break;
-          }
-        } catch (err: any) {
-          attempts++;
-          lastError = err;
-          console.log(`[AI Q&A Alert] Mô hình ${modelName} bận/lỗi ở lần thử ${attempts}/${maxRetries}: ${err.message || err}`);
-        }
-      }
-      if (reportStream) {
-        break;
-      }
-    }
-
-    if (!reportStream) {
-      throw lastError || new Error("Tất cả các dịch vụ giải đáp y đức đang quá tải. Vui lòng bấm hỏi lại sau giây lát.");
-    }
+    // Gọi helper với cơ chế tự động thử lại nhiều lần và tự động chuyển đổi mô hình
+    const reportStream = await generateContentStreamWithRetry(ai, prompt, { temperature: 0.7 });
 
     res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache");
