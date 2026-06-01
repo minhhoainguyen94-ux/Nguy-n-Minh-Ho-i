@@ -1,0 +1,6 @@
+{
+  "name": "Trợ lý Thai kỳ AI",
+  "description": "Trợ lý sức khỏe thai kỳ chuyên nghiệp, giúp tính toán bách phân vị và cung cấp tư vấn y khoa dinh dưỡng từ Phòng khám Nội Tổng Hợp - Sản Phụ khoa & Siêu âm Bác sĩ Biên - Bác sĩ CKI. Huế.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
