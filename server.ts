@@ -18,6 +18,18 @@ const __dirname = path.dirname(__filename);
 const app = express();
 app.use(express.json({ limit: "15mb" }));
 
+// Configure CORS for cross-origin requests (e.g. from Netlify)
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  if (req.method === "OPTIONS") {
+    res.sendStatus(200);
+    return;
+  }
+  next();
+});
+
 // Lazy instance for GoogleGenAI to prevent crashing at startup if the key is missing
 let aiClient: GoogleGenAI | null = null;
 function getGeminiClient(): GoogleGenAI {

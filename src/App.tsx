@@ -24,6 +24,21 @@ import {
 import { getFetalWeightReference } from "./fetalData";
 import { AssessmentResult } from "./types";
 
+const getApiUrl = (endpoint: string): string => {
+  const isLocalOrPlatform = 
+    window.location.hostname === "localhost" || 
+    window.location.hostname === "127.0.0.1" || 
+    window.location.hostname.endsWith(".run.app") ||
+    window.location.hostname.endsWith(".google.app") ||
+    window.location.hostname.endsWith(".web.app");
+  
+  if (isLocalOrPlatform) {
+    return endpoint;
+  }
+  // Fallback to the live Cloud Run backend container hosting the actual Node backend with the API keys
+  return `https://ais-pre-carkrevtgniuuhemj4zgse-704785064573.asia-southeast1.run.app${endpoint}`;
+};
+
 // Dynamic fruits database for pregnancy weeks
 const FRUITS_BY_WEEK: { [key: number]: { name: string; icon: string; size: string; desc: string } } = {
   8: { name: "Quả mâm xôi (Raspberry)", icon: "🍓", size: "1.6 cm", desc: "Bé yêu bắt đầu hình thành các ngón tay và ngón chân nhỏ xíu." },
@@ -155,7 +170,7 @@ export default function App() {
     setQaAnswer("");
 
     try {
-      const response = await fetch("/api/ask", {
+      const response = await fetch(getApiUrl("/api/ask"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -538,7 +553,7 @@ export default function App() {
       const clientDateString = new Date().toISOString().split("T")[0];
 
       // Gửi yêu cầu API và chạy hiệu ứng thanh tiến trình chẩn đoán y khoa song song
-      const apiPromise = fetch("/api/assess", {
+      const apiPromise = fetch(getApiUrl("/api/assess"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -786,23 +801,40 @@ export default function App() {
             </div>
             <div>
               <p className="text-xs uppercase tracking-wider text-rose-500 font-bold mb-0.5">Phòng khám Nội Tổng Hợp - Sản Phụ khoa & Siêu âm</p>
-              <h1 className="text-xl font-bold text-stone-900 tracking-tight flex items-center">
-                Bác sĩ Biên - Bác sĩ CKI. Nguyễn Đình Huế  
-                <span className="ml-2.5 px-2 py-0.5 text-[10px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-full flex items-center gap-1">
-                  <Sparkles className="w-2.5 h-2.5" /> Trợ lý Thai kỳ AI
+              <h1 className="text-xl font-bold text-stone-900 tracking-tight flex flex-wrap items-center gap-2">
+                <span>Bác sĩ Biên - Bác sĩ CKI. Nguyễn Đình Huế</span>  
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200/60 rounded-full shadow-sm">
+                  <span className="relative flex h-1.5 w-1.5">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+                  </span>
+                  <Sparkles className="w-2.5 h-2.5 text-emerald-600 animate-pulse" />
+                  <span>Trợ lý Thai kỳ AI</span>
                 </span>
               </h1>
             </div>
           </div>
 
-          <div className="flex items-center space-x-5 text-stone-500 text-xs">
-            <a href="tel:0327058775" className="flex items-center gap-1.5 hover:text-rose-500 transition-colors">
-              <Phone className="w-3.5 h-3.5 text-rose-400" />
-              <span>Hotline Tư Vấn: 0327058775</span>
+          <div className="flex flex-wrap items-center justify-center sm:justify-end gap-x-3 gap-y-2 text-stone-500 text-[11px] sm:text-xs">
+            <a href="tel:0327058775" className="flex items-center gap-1.5 hover:text-rose-600 transition-all font-bold text-rose-700 bg-rose-50/50 hover:bg-rose-50 border border-rose-100/80 px-2.5 py-1 rounded-full text-[10px] sm:text-[11px] transition-all group">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
+              </span>
+              <Phone className="w-3 h-3 text-rose-500 shrink-0 group-hover:animate-bounce" />
+              <span className="tracking-wide">Hotline: 0327058775</span>
             </a>
-            <div className="flex items-center gap-1.5">
-              <MapPin className="w-3.5 h-3.5 text-stone-400" />
-              <span>Chợ Long Thọ, Phước An, TP Đồng Nai</span>
+            <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-200/60 px-2.5 py-1 rounded-full text-amber-900 font-bold text-[10px] sm:text-[11px] shadow-sm animate-pulse">
+              <span className="relative flex h-1.5 w-1.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-amber-500"></span>
+              </span>
+              <Clock className="w-3 h-3 text-amber-600 shrink-0" />
+              <span className="tracking-wide">Giờ làm việc: 6h00 - 8h30 (Tối)</span>
+            </div>
+            <div className="flex items-center gap-1.5 bg-stone-50 border border-stone-200/60 px-2.5 py-1 rounded-full text-stone-700 font-semibold text-[10px] sm:text-[11px] hover:border-stone-300 transition-all">
+              <MapPin className="w-3 h-3 text-stone-500 shrink-0" />
+              <span>Phước An, Nhơn Trạch, Đồng Nai</span>
             </div>
           </div>
         </div>
@@ -1460,6 +1492,9 @@ export default function App() {
       <footer className="mt-20 border-t border-stone-200/60 bg-stone-100/60 py-10 text-center" id="main-footer">
         <div className="max-w-6xl mx-auto px-4 text-stone-500 text-xs space-y-3">
           <p className="font-bold text-stone-700">© 2026 Phòng khám Nội Tổng Hợp - Sản Phụ khoa & Siêu âm Bác sĩ Biên - Bác sĩ CKI. Nguyễn Đình Huế. Bảo lưu mọi quyền.</p>
+          <p className="text-[11px] text-stone-500 font-semibold" id="footer-clinic-hours">
+            Địa chỉ: Chợ Long Thọ, Phước An, Đồng Nai | Hotline: 0327058775 | Giờ làm việc hàng ngày: 6:00 - 8:30 (Tối)
+          </p>
           <p className="max-w-2xl mx-auto text-[11px] leading-relaxed">
             Hệ thống Trợ lý Thai kỳ AI thuộc bản quyền công nghệ thông tin y khoa Phòng khám Bác sĩ Biên - Bác sĩ CKI. Nguyễn Đình Huế. 
             Mọi lời khuyên chăm sóc sức khỏe, chế độ dinh dưỡng, xét nghiệm cần luôn tuân chỉ theo sự chẩn đoán lâm sàng của bác sĩ sản khoa trực tiếp chăm sóc thai kỳ của bạn.
