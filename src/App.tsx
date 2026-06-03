@@ -153,6 +153,110 @@ export default function App() {
     }
     return "";
   });
+  const [configGeminiApiKey, setConfigGeminiApiKey] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      return window.localStorage.getItem("CUSTOM_GEMINI_API_KEY") || "";
+    }
+    return "";
+  });
+
+  const isClientSideGeminiActive = (): boolean => {
+    const key = configGeminiApiKey?.trim() || (import.meta as any).env?.VITE_GEMINI_API_KEY?.trim();
+    return !!key;
+  };
+
+  const getActiveGeminiApiKey = (): string => {
+    return configGeminiApiKey?.trim() || (import.meta as any).env?.VITE_GEMINI_API_KEY?.trim() || "";
+  };
+
+  const streamGeminiClientSide = async (
+    prompt: string, 
+    onChunk: (text: string) => void,
+    onError: (err: string) => void
+  ) => {
+    try {
+      const apiKey = getActiveGeminiApiKey();
+      if (!apiKey) {
+        throw new Error("Không tìm thấy Mã khóa API Gemini thiết lập.");
+      }
+
+      // We support automatic model fallback list on CLIENT SIDE too!
+      const modelsToTry = ["gemini-1.5-flash", "gemini-2.5-flash", "gemini-1.5-pro"];
+      let lastError: any = null;
+      let success = false;
+
+      for (const modelName of modelsToTry) {
+        try {
+          console.log(`[Client Gemini] Đang thử kết nối mô hình ${modelName}...`);
+          const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse&key=${apiKey}`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: { temperature: 0.7 }
+              })
+            }
+          );
+
+          if (!response.ok) {
+            const errText = await response.text();
+            throw new Error(`Google API returned response code ${response.status}: ${errText}`);
+          }
+
+          const reader = response.body?.getReader();
+          if (!reader) {
+            throw new Error("Không khởi tạo được stream reader từ phản hồi Google.");
+          }
+
+          const decoder = new TextDecoder("utf-8");
+          let buffer = "";
+
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+
+            for (const line of lines) {
+              if (!line.trim().startsWith("data:")) continue;
+              const jsonStr = line.replace(/^data:\s*/, "").trim();
+              if (!jsonStr) continue;
+
+              try {
+                const parsed = JSON.parse(jsonStr);
+                const chunkText = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (chunkText) {
+                  onChunk(chunkText);
+                }
+              } catch (e) {
+                // Ignore any heartbeat or structural SSE markers
+              }
+            }
+          }
+
+          success = true;
+          break; // successfully streamed!
+        } catch (err: any) {
+          console.error(`[Client Gemini Error] Lỗi khi sử dụng mô hình ${modelName}:`, err);
+          lastError = err;
+        }
+      }
+
+      if (!success) {
+        throw lastError || new Error("Không thể kết nối đến tất cả các mô hình Gemini.");
+      }
+    } catch (err: any) {
+      console.error("[Client Gemini stream error]:", err);
+      onError(err.message || String(err));
+      throw err;
+    }
+  };
 
   // Clock state for real-time Vietnamese locale date/time tracking under clinic address
   const [currentDateTime, setCurrentDateTime] = useState<Date>(new Date());
@@ -214,6 +318,33 @@ export default function App() {
     setQaAnswer("");
 
     try {
+      const askWeek = currentW || (assessResult ? assessResult.weeks : explorerWeek);
+      const prompt = `Bạn là Trợ lý Thai kỳ AI đại diện cho Bác sĩ Hoài (BS. Hoài) tại Phòng khám Bác sĩ Biên - Bác sĩ CKI. Nguyễn Đình Huế.
+Hãy giải đáp câu hỏi của mẹ bầu một cách chuyên nghiệp, cụ thể, dễ hiểu, giàu yêu thương và cực kỳ ấm áp.
+${askWeek ? `Lưu ý mốc tuần thai dự kiến hiện tại của mẹ: Tuần thứ ${askWeek}. Hãy đưa ra các khuyến cáo dinh dưỡng học, chế độ ăn uống, kiểm tra y khoa thật sát sườn với tuần thai này nhé.` : ""}
+
+Câu hỏi từ mẹ bầu: "${finalQuestion}"
+
+Hãy cấu trúc câu trả lời một cách khoa học bằng các biểu tượng gạch đầu dòng Markdown, tối ưu hiển thị đọc dễ dàng trên thiết bị di động.
+Bắt buộc in đậm nguyên văn dòng lưu ý y khoa sau để tuân thủ đạo đức nghề nghiệp:
+"Lưu ý: Kết quả tư vấn từ Trợ lý AI và bảng chuẩn chỉ mang tính chất tham khảo chung. Quý khách vui lòng qua trực tiếp Phòng khám Bác sĩ Biên - Bác sĩ CKI. Nguyễn Đình Huế hoặc trao đổi trực tiếp với bác sĩ chuyên khoa sản của bạn để nhận chẩn đoán và tư vấn y khoa phù hợp nhất."`;
+
+      if (isClientSideGeminiActive()) {
+        let accumulatedAnswer = "";
+        await streamGeminiClientSide(
+          prompt,
+          (chunk) => {
+            accumulatedAnswer += chunk;
+            setQaAnswer(accumulatedAnswer);
+          },
+          (err) => {
+            setQaError(err);
+          }
+        );
+        setQaLoading(false);
+        return;
+      }
+
       const url = getApiUrl("/api/ask");
       const isCrossOrigin = url.startsWith("http");
       const headers: Record<string, string> = {
@@ -226,7 +357,7 @@ export default function App() {
         credentials: isCrossOrigin ? "include" : "same-origin",
         body: JSON.stringify({
           question: finalQuestion,
-          week: currentW || (assessResult ? assessResult.weeks : explorerWeek)
+          week: askWeek
         })
       });
 
@@ -601,6 +732,91 @@ export default function App() {
         evaluation = "Thai phát triển phù hợp tuổi thai";
       }
 
+      if (isClientSideGeminiActive()) {
+        const prompt = `Bạn là Trợ lý Thai kỳ AI đại diện cho Bác sĩ Hoài (BS. Hoài) tại Phòng khám Bác sĩ Biên - Bác sĩ CKI. Nguyễn Đình Huế.
+Hãy viết một báo cáo phân tích thai kỳ chuyên nghiệp, cụ thể theo từng mốc tuần thai, vừa mang tính chuyên gia y khoa vừa cực kỳ ấm áp, tin cậy.
+
+Thông tin phân tích:
+- Tuổi thai hiện tại: ${weeks} tuần ${days} ngày (Tổng cộng ${totalDays} ngày bầu)
+- Cân nặng thai nhi ước tính (EFW): ${parsedEfw} gram
+- Kết quả đánh giá lâm sàng: ${evaluation} (Chuẩn tuần thai thứ ${weeks} là - p10: ${ref.p10}g, p50 trung bình: ${ref.p50}g, p90: ${ref.p90}g)
+
+Yêu cầu cấu trúc câu trả lời bắt buộc phải theo định dạng phân phần đúng dưới đây bằng các tiêu đề Markdown:
+
+### 👶 Tuổi thai hiện tại
+[Phân tích chi tiết tuần thai hiện tại ${weeks} của mẹ, bé yêu cỡ quả gì, sự phát triển chung giai đoạn này]
+
+### ⚖️ Đánh giá cân nặng thai nhi
+[So sánh chi tiết cân nặng thực tế ${parsedEfw}g với khoảng chuẩn bách phân vị p10-p90. Nhắc nhở tích cực, trấn an mẹ hoặc đưa ra khuyến cáo phù hợp theo đánh giá: "${evaluation}"]
+
+### 📈 Nhận xét sự phát triển
+[Đưa ra nhận xét lâm sàng giàu yêu thương từ Phòng khám BS. Hoài về sự hoàn thiện hệ tuần hoàn, não bộ, thính giác hay cơ xương của em bé ở tuần ${weeks}]
+
+### 🥗 Chế độ dinh dưỡng phù hợp với tuổi thai hiện tại
+[Gợi ý cụ thể thực phẩm và chất dinh dưỡng bổ sung, có nhấn mạnh phù hợp với mức phát triển của bé hiện tại: ${evaluation}. Trình bày đẹp mắt bằng gạch đầu dòng]
+
+### 📅 Các xét nghiệm hoặc mốc khám thai cần lưu ý trong giai đoạn hiện tại
+[Chỉ ra chính xác các mốc siêu âm, tiêm vaccine uốn ván, nghiệm pháp dung nạp đường huyết thai kỳ (nếu trong tuần 24-28), xét nghiệm GBS (nếu tuần 35-37) hay lịch khám tương ứng với tuần ${weeks}]
+
+### 🚨 Các dấu hiệu cần đi khám ngay
+[Liệt kê rõ ràng và khẩn cấp các dấu hiệu bất thường như ra huyết, đau bụng co thắt, rỉ ối, ra nước âm đạo, thai máy giảm hay không máy...]
+
+Thêm một lời chia sẻ tích cực tạo động lực từ Bác sĩ Hoài ở cuối.
+
+Cuối cùng, bắt buộc in đậm nguyên văn dòng lưu ý y khoa sau để tuân thủ đạo đức nghề nghiệp:
+"Lưu ý: Kết quả phân tích từ Trợ lý AI và bảng chuẩn chỉ mang tính chất tham khảo. Vui lòng trực tiếp tới Phòng khám Bác sĩ Biên - Bác sĩ CKI. Nguyễn Đình Huế hoặc gặp bác sĩ sản khoa của bạn để thăm khám lâm sàng, siêu âm đo đạc chính xác và nhận được tư vấn trực tiếp tốt nhất."`;
+
+        // Start progressive loading animation in parallel
+        let currentProgress = 0;
+        const progressPromise = new Promise<void>((resolve) => {
+          const interval = setInterval(() => {
+            currentProgress += 2;
+            setLoadingProgress(Math.min(100, currentProgress));
+            if (currentProgress >= 100) {
+              clearInterval(interval);
+              resolve();
+            }
+          }, 60);
+        });
+
+        // Set initial standard metrics for charts
+        setAssessResult({
+          weeks,
+          days,
+          totalDays,
+          efw: parsedEfw,
+          ref,
+          evaluation,
+          report: ""
+        });
+
+        let accumulatedReport = "";
+        const apiPromise = streamGeminiClientSide(
+          prompt,
+          (chunk) => {
+            accumulatedReport += chunk;
+            setAssessResult(prev => {
+              if (!prev) return null;
+              return {
+                ...prev,
+                report: accumulatedReport
+              };
+            });
+          },
+          (err) => {
+            setAssessError(err);
+          }
+        );
+
+        await progressPromise;
+
+        setIsZoomed(true);
+        setAssessLoading(false);
+
+        await apiPromise;
+        return;
+      }
+
       const clientDateString = new Date().toISOString().split("T")[0];
 
       const url = getApiUrl("/api/assess");
@@ -850,7 +1066,8 @@ export default function App() {
     typeof window !== "undefined" && 
     window.location.hostname !== "localhost" && 
     window.location.hostname !== "127.0.0.1" && 
-    !window.location.hostname.endsWith(".run.app");
+    !window.location.hostname.endsWith(".run.app") &&
+    !isClientSideGeminiActive();
 
   // Main UI Render
   return (
@@ -1631,37 +1848,60 @@ export default function App() {
                 ⚠️ Giải thích lỗi CORS (302 Found) trên Netlify:
               </p>
               <p>
-                Trang web này hiện đang được bác sĩ lưu trữ/chạy từ máy chủ phụ <strong className="text-stone-800">Netlify ({typeof window !== "undefined" ? window.location.hostname : "pkbshue.netlify.app"})</strong>. 
-                Do máy chủ AI của AI Studio mặc định bảo mật bằng mật khẩu đăng nhập tài khoản Google, việc gửi yêu cầu trực tiếp từ một tên miền ngoài sẽ bị chuyển hướng (302 Redirect) và bị trình duyệt chặn lại do lỗi CORS.
+                Trang web này hiện đang được chạy từ máy chủ tĩnh <strong className="text-stone-800">Netlify ({typeof window !== "undefined" ? window.location.hostname : "pkbshue.netlify.app"})</strong>. 
+                Vì máy chủ AI của AI Studio mặc định yêu cầu đăng nhập tài khoản Google bảo mật, khách hàng truy cập từ ngoài sẽ bị từ chối kết nối (lỗi CORS).
               </p>
               <div className="border-t border-stone-200/60 pt-2 space-y-1.5">
-                <p className="font-bold text-stone-800">Các phương pháp giải quyết:</p>
+                <p className="font-bold text-stone-800">Các cách khắc phục:</p>
                 <p>
-                  <strong className="text-emerald-700">Cách 1 (Khuyên dùng):</strong> Sử dụng trực tiếp đường dẫn gốc <strong className="text-emerald-700">Cloud Run</strong> chính thức của dự án (mở liên kết Cloud Run được cung cấp bởi môi trường AI Studio). Khi truy cập trực tiếp, frontend và backend chạy chung một tên miền, dữ liệu sẽ được truyền tải mượt mà không bị lỗi CORS hay yêu cầu đăng nhập bên thứ ba.
+                  <strong className="text-emerald-700">Cách 1 (Khuyên dùng nhất trên Netlify):</strong> Dán trực tiếp <strong className="text-emerald-700">Mã khóa API Gemini</strong> sản khoa của bác sĩ vào ô bên dưới (hoặc khai báo biến môi trường <code className="bg-stone-100 px-1 py-0.5 rounded text-[10px]">VITE_GEMINI_API_KEY</code> trên Netlify). Ứng dụng sẽ gọi thẳng đến AI của Google ngay từ trình duyệt của khách hàng, tốc độ siêu tốc, 100% không lỗi CORS, bảo mật tốt!
                 </p>
                 <p>
-                  <strong className="text-sky-700">Cách 2 (Sử dụng Netlify riêng biệt):</strong> Tải mã nguồn full-stack này xuống và triển khai phần backend lên các dịch vụ đám mây công cộng không có tường lửa mật khẩu (như Cloud Run riêng, Vercel, Render.com hoặc Railway). Sau đó, hãy dán liên kết URL máy chủ của bác sĩ dịch vụ vào ô dưới đây.
+                  <strong className="text-sky-700">Cách 2:</strong> Sử dụng trực tiếp đường dẫn Cloud Run gốc của dự án.
+                </p>
+                <p>
+                  <strong className="text-stone-700">Cách 3:</strong> Tự triển khai backend Node.js riêng và cấu hình URL bên dưới.
                 </p>
               </div>
             </div>
 
             {/* Input fields */}
-            <div className="space-y-2">
-              <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider">
-                Địa chỉ URL máy chủ Backend (API Base URL):
-              </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  value={configBackendUrl}
-                  onChange={(e) => setConfigBackendUrl(e.target.value)}
-                  placeholder="Để trống nếu muốn dùng mặc định của môi trường"
-                  className="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl bg-stone-50/50 focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500/80 outline-none transition-all font-mono placeholder:font-sans placeholder:text-stone-400"
-                />
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider">
+                  🔑 Mã khóa API Gemini (Ưu tiên số 1 cho Netlify):
+                </label>
+                <div className="relative">
+                  <input
+                    type="password"
+                    value={configGeminiApiKey}
+                    onChange={(e) => setConfigGeminiApiKey(e.target.value)}
+                    placeholder="Nhập mã khóa AI Gemini (AIzaSy...)"
+                    className="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl bg-stone-50/50 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/80 outline-none transition-all font-mono placeholder:font-sans placeholder:text-stone-400"
+                  />
+                </div>
+                <p className="text-[10px] text-stone-500">
+                  Lưu ý: Khóa này sẽ được lưu an toàn trong trình duyệt của bạn để gọi trực tiếp tới Google Gemini API mà không cần máy chủ trung gian.
+                </p>
               </div>
-              <p className="text-[10px] text-stone-500">
-                Lưu ý: URL phải có dạng đầy đủ giao thức, ví dụ: <code className="bg-stone-100 px-1 py-0.5 rounded">https://my-custom-backend.run.app</code>
-              </p>
+
+              <div className="space-y-2 border-t border-stone-100 pt-3">
+                <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider">
+                  🌐 Địa chỉ URL máy chủ Backend (Tùy chọn):
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={configBackendUrl}
+                    onChange={(e) => setConfigBackendUrl(e.target.value)}
+                    placeholder="Để trống nếu muốn dùng mặc định"
+                    className="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl bg-stone-50/50 focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500/80 outline-none transition-all font-mono placeholder:font-sans placeholder:text-stone-400"
+                  />
+                </div>
+                <p className="text-[10px] text-stone-500">
+                  Ví dụ: <code className="bg-stone-100 px-1 py-0.5 rounded">https://my-custom-backend.run.app</code>
+                </p>
+              </div>
             </div>
 
             {/* Modal Actions */}
@@ -1670,6 +1910,7 @@ export default function App() {
                 onClick={() => {
                   if (typeof window !== "undefined") {
                     window.localStorage.removeItem("CUSTOM_BACKEND_URL");
+                    window.localStorage.removeItem("CUSTOM_GEMINI_API_KEY");
                     window.location.reload();
                   }
                 }}
@@ -1691,10 +1932,15 @@ export default function App() {
                     } else {
                       window.localStorage.removeItem("CUSTOM_BACKEND_URL");
                     }
+                    if (configGeminiApiKey.trim()) {
+                      window.localStorage.setItem("CUSTOM_GEMINI_API_KEY", configGeminiApiKey.trim());
+                    } else {
+                      window.localStorage.removeItem("CUSTOM_GEMINI_API_KEY");
+                    }
                     window.location.reload();
                   }
                 }}
-                className="px-4 py-1.5 text-xs text-white bg-sky-600 hover:bg-sky-700 rounded-xl font-bold transition-all cursor-pointer shadow-sm shadow-sky-650/20"
+                className="px-4 py-1.5 text-xs text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl font-bold transition-all cursor-pointer shadow-sm shadow-emerald-650/20"
               >
                 Lưu & Áp dụng
               </button>
