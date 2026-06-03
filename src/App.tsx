@@ -19,18 +19,29 @@ import {
   Phone,
   MapPin,
   RefreshCw,
-  Heart
+  Heart,
+  Settings,
+  Database
 } from "lucide-react";
 import { getFetalWeightReference } from "./fetalData";
 import { AssessmentResult } from "./types";
 
 const getApiUrl = (endpoint: string): string => {
+  if (typeof window !== "undefined") {
+    const savedUrl = window.localStorage.getItem("CUSTOM_BACKEND_URL");
+    if (savedUrl && savedUrl.trim()) {
+      return `${savedUrl.trim().replace(/\/+$/, '')}${endpoint}`;
+    }
+  }
+
   const isLocalOrPlatform = 
-    window.location.hostname === "localhost" || 
-    window.location.hostname === "127.0.0.1" || 
-    window.location.hostname.endsWith(".run.app") ||
-    window.location.hostname.endsWith(".google.app") ||
-    window.location.hostname.endsWith(".web.app");
+    typeof window !== "undefined" && (
+      window.location.hostname === "localhost" || 
+      window.location.hostname === "127.0.0.1" || 
+      window.location.hostname.endsWith(".run.app") ||
+      window.location.hostname.endsWith(".google.app") ||
+      window.location.hostname.endsWith(".web.app")
+    );
   
   if (isLocalOrPlatform) {
     return endpoint;
@@ -134,6 +145,39 @@ function getIconForLine(line: string, defaultIcon: string = "✨"): string {
 }
 
 export default function App() {
+  // Config & CORS configuration states
+  const [isConfigModalOpen, setIsConfigModalOpen] = useState<boolean>(false);
+  const [configBackendUrl, setConfigBackendUrl] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      return window.localStorage.getItem("CUSTOM_BACKEND_URL") || "";
+    }
+    return "";
+  });
+
+  // Clock state for real-time Vietnamese locale date/time tracking under clinic address
+  const [currentDateTime, setCurrentDateTime] = useState<Date>(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentDateTime(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formatVietnameseDateTime = (date: Date) => {
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
+    
+    const daysOfWeek = ["Chủ Nhật", "Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy"];
+    const dayName = daysOfWeek[date.getDay()];
+    
+    return `${hours}:${minutes}:${seconds} | ${dayName}, ${day}/${month}/${year}`;
+  };
+
   // Fetal Growth Assessment States
   const [edd, setEdd] = useState<string>("");
   const [efw, setEfw] = useState<string>("");
@@ -802,10 +846,36 @@ export default function App() {
     );
   };
 
+  const isNetlifyOrOtherOrigin = 
+    typeof window !== "undefined" && 
+    window.location.hostname !== "localhost" && 
+    window.location.hostname !== "127.0.0.1" && 
+    !window.location.hostname.endsWith(".run.app");
+
   // Main UI Render
   return (
     <div className="min-h-screen bg-gradient-to-b from-[#FAF8F5] via-[#FFFDFB] to-[#F1EDE7] text-stone-800 antialiased font-sans pb-16" id="applet-body">
       
+      {/* Dynamic Netlify/CORS Fallback Notice Banner */}
+      {isNetlifyOrOtherOrigin && (
+        <div className="bg-gradient-to-r from-amber-600 via-rose-600 to-amber-600 text-white text-xs font-bold py-2.5 px-4 text-center shadow-md border-b border-stone-200/20 flex flex-wrap items-center justify-center gap-2 animate-pulse" id="cors-netlify-alert-banner">
+          <span className="inline-flex items-center gap-1 bg-white/20 px-2 py-0.5 rounded-full text-[10px] uppercase">
+            ⚠️ Lưu ý bảo mật & CORS
+          </span>
+          <span className="tracking-wide">
+            Để tránh lỗi kết nối với Trợ lý AI khi chạy ngoài môi trường bảo mật, xin vui lòng:
+          </span>
+          <a 
+            href="https://ais-pre-carkrevtgniuuhemj4zgse-704785064573.asia-southeast1.run.app" 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="bg-white text-rose-700 hover:bg-stone-50 border border-white hover:scale-102 px-3 py-1 rounded-full text-[11px] font-extrabold shadow-sm transition-all inline-flex items-center gap-1"
+          >
+            Sử dụng trực tiếp đường dẫn gốc Cloud Run chính thức của dự án ↗
+          </a>
+        </div>
+      )}
+
       {/* Header Panel */}
       <header className="sticky top-0 z-40 bg-white/85 backdrop-blur-md border-b border-stone-100 shadow-sm" id="main-header">
         <div className="max-w-6xl mx-auto px-4 py-3.5 flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -825,7 +895,7 @@ export default function App() {
                   <Sparkles className="w-2.5 h-2.5 text-emerald-600 animate-pulse" />
                   <span>Trợ lý Thai kỳ AI</span>
                 </span>
-              </h1>
+               </h1>
             </div>
           </div>
 
@@ -846,10 +916,30 @@ export default function App() {
               <Clock className="w-3 h-3 text-amber-600 shrink-0" />
               <span className="tracking-wide">Giờ làm việc: 6h00 - 8h30 (Tối)</span>
             </div>
-            <div className="flex items-center gap-1.5 bg-stone-50 border border-stone-200/60 px-2.5 py-1 rounded-full text-stone-700 font-semibold text-[10px] sm:text-[11px] hover:border-stone-300 transition-all">
-              <MapPin className="w-3 h-3 text-stone-500 shrink-0" />
-              <span>Phước An, Nhơn Trạch, Đồng Nai</span>
+            
+            {/* Clinic Address Badges & Real-time Live Clock */}
+            <div className="flex flex-col items-center sm:items-end gap-1">
+              <div className="flex items-center gap-1.5 bg-stone-50 border border-stone-200/60 px-2.5 py-1 rounded-full text-stone-700 font-semibold text-[10px] sm:text-[11px] hover:border-stone-300 transition-all">
+                <MapPin className="w-3 h-3 text-stone-500 shrink-0" />
+                <span>Phước An, Nhơn Trạch, Đồng Nai</span>
+              </div>
+              <div className="text-[10px] font-mono text-emerald-800 bg-emerald-50/75 border border-emerald-200/40 px-2.5 py-0.5 rounded-full flex items-center gap-1.5 shadow-3xs hover:border-emerald-200 transition-all">
+                <span className="relative flex h-1.5 w-1.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+                </span>
+                <span>{formatVietnameseDateTime(currentDateTime)}</span>
+              </div>
             </div>
+
+            <button 
+              onClick={() => setIsConfigModalOpen(true)}
+              className="flex items-center gap-1.5 bg-sky-50 border border-sky-200/60 hover:bg-sky-100/80 hover:border-sky-300 px-2.5 py-1 rounded-full text-sky-800 font-bold text-[10px] sm:text-[11px] shadow-sm transition-all cursor-pointer group"
+              title="Cấu hình kết nối máy chủ quản lý AI"
+            >
+              <Settings className="w-3 h-3 text-sky-500 shrink-0 group-hover:rotate-45 transition-transform" />
+              <span>Cấu hình API</span>
+            </button>
           </div>
         </div>
       </header>
@@ -1515,6 +1605,104 @@ export default function App() {
           </p>
         </div>
       </footer>
+
+      {/* Dynamic API Configuration Modal */}
+      {isConfigModalOpen && (
+        <div className="fixed inset-0 bg-stone-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-fade-in animate-duration-200" id="api-config-modal-overlay">
+          <div className="bg-white rounded-2xl border border-stone-100 max-w-lg w-full shadow-2xl p-6 text-stone-800 space-y-4" id="api-config-modal">
+            
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-stone-100 pb-3">
+              <div className="flex items-center gap-2">
+                <Database className="w-5 h-5 text-sky-600" />
+                <h3 className="font-bold text-stone-900 text-lg">Cấu hình API kết nối Trợ lý AI</h3>
+              </div>
+              <button 
+                onClick={() => setIsConfigModalOpen(false)}
+                className="text-stone-400 hover:text-stone-600 text-md font-bold cursor-pointer h-7 w-7 rounded-full hover:bg-stone-50 flex items-center justify-center transition-all"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Explanatory notice */}
+            <div className="text-xs text-stone-600 space-y-2.5 leading-relaxed bg-stone-50/85 p-4 rounded-xl border border-stone-200/40">
+              <p className="font-bold text-rose-700 flex items-center gap-1">
+                ⚠️ Giải thích lỗi CORS (302 Found) trên Netlify:
+              </p>
+              <p>
+                Trang web này hiện đang được bác sĩ lưu trữ/chạy từ máy chủ phụ <strong className="text-stone-800">Netlify ({typeof window !== "undefined" ? window.location.hostname : "pkbshue.netlify.app"})</strong>. 
+                Do máy chủ AI của AI Studio mặc định bảo mật bằng mật khẩu đăng nhập tài khoản Google, việc gửi yêu cầu trực tiếp từ một tên miền ngoài sẽ bị chuyển hướng (302 Redirect) và bị trình duyệt chặn lại do lỗi CORS.
+              </p>
+              <div className="border-t border-stone-200/60 pt-2 space-y-1.5">
+                <p className="font-bold text-stone-800">Các phương pháp giải quyết:</p>
+                <p>
+                  <strong className="text-emerald-700">Cách 1 (Khuyên dùng):</strong> Sử dụng trực tiếp đường dẫn gốc <strong className="text-emerald-700">Cloud Run</strong> chính thức của dự án (mở liên kết Cloud Run được cung cấp bởi môi trường AI Studio). Khi truy cập trực tiếp, frontend và backend chạy chung một tên miền, dữ liệu sẽ được truyền tải mượt mà không bị lỗi CORS hay yêu cầu đăng nhập bên thứ ba.
+                </p>
+                <p>
+                  <strong className="text-sky-700">Cách 2 (Sử dụng Netlify riêng biệt):</strong> Tải mã nguồn full-stack này xuống và triển khai phần backend lên các dịch vụ đám mây công cộng không có tường lửa mật khẩu (như Cloud Run riêng, Vercel, Render.com hoặc Railway). Sau đó, hãy dán liên kết URL máy chủ của bác sĩ dịch vụ vào ô dưới đây.
+                </p>
+              </div>
+            </div>
+
+            {/* Input fields */}
+            <div className="space-y-2">
+              <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider">
+                Địa chỉ URL máy chủ Backend (API Base URL):
+              </label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={configBackendUrl}
+                  onChange={(e) => setConfigBackendUrl(e.target.value)}
+                  placeholder="Để trống nếu muốn dùng mặc định của môi trường"
+                  className="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl bg-stone-50/50 focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500/80 outline-none transition-all font-mono placeholder:font-sans placeholder:text-stone-400"
+                />
+              </div>
+              <p className="text-[10px] text-stone-500">
+                Lưu ý: URL phải có dạng đầy đủ giao thức, ví dụ: <code className="bg-stone-100 px-1 py-0.5 rounded">https://my-custom-backend.run.app</code>
+              </p>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-stone-100 pt-3">
+              <button
+                onClick={() => {
+                  if (typeof window !== "undefined") {
+                    window.localStorage.removeItem("CUSTOM_BACKEND_URL");
+                    window.location.reload();
+                  }
+                }}
+                className="px-3 py-1.5 text-xs text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl font-semibold transition-all cursor-pointer"
+              >
+                Khôi phục mặc định
+              </button>
+              <button
+                onClick={() => setIsConfigModalOpen(false)}
+                className="px-3 py-1.5 text-xs text-stone-600 bg-stone-50 hover:bg-stone-100 border border-stone-200 rounded-xl font-semibold transition-all cursor-pointer"
+              >
+                Đóng
+              </button>
+              <button
+                onClick={() => {
+                  if (typeof window !== "undefined") {
+                    if (configBackendUrl.trim()) {
+                      window.localStorage.setItem("CUSTOM_BACKEND_URL", configBackendUrl.trim());
+                    } else {
+                      window.localStorage.removeItem("CUSTOM_BACKEND_URL");
+                    }
+                    window.location.reload();
+                  }
+                }}
+                className="px-4 py-1.5 text-xs text-white bg-sky-600 hover:bg-sky-700 rounded-xl font-bold transition-all cursor-pointer shadow-sm shadow-sky-650/20"
+              >
+                Lưu & Áp dụng
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
 
     </div>
   );
